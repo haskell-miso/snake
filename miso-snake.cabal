@@ -8,6 +8,10 @@ build-type:          Simple
 cabal-version:       >=1.10
 
 executable app
+  if arch(javascript)
+     ld-options:
+       -sEXPORTED_RUNTIME_METHODS=HEAP8
+
   if arch(wasm32)
     cpp-options:
       -DWASM
