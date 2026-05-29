@@ -1,5 +1,6 @@
 ----------------------------------------------------------------------------
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE BlockArguments    #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE CPP               #-}
 ----------------------------------------------------------------------------
@@ -7,7 +8,6 @@ module Main where
 ----------------------------------------------------------------------------
 import           Control.Concurrent (threadDelay)
 import           Control.Monad (forever, when)
-import qualified Data.IntSet as IS
 ----------------------------------------------------------------------------
 import           Miso hiding (Phase)
 import           Miso.CSS hiding (ms, background, Phase)
@@ -18,8 +18,6 @@ import qualified Miso.Svg.Property as SP
 import           Miso.Lens
 import           Miso.Random (replicateRM)
 import           Miso.Reload
-import           Miso.String (MisoString, ms)
-import           Miso.Subscription.Keyboard (arrowsSub, keyboardSub, Arrows(..))
 ----------------------------------------------------------------------------
 
 gridSize :: Int
@@ -36,12 +34,12 @@ data Dir = DUp | DDown | DLeft | DRight deriving (Show, Eq)
 data Phase = NotStarted | Playing | GameOver deriving (Show, Eq)
 
 data Model = Model
-  { _snake  :: [(Int, Int)]
-  , _dir    :: Dir
-  , _queued :: Dir
-  , _food   :: (Int, Int)
-  , _score  :: Int
-  , _phase  :: Phase
+  { _snake  :: ![(Int, Int)]
+  , _dir    :: !Dir
+  , _queued :: !Dir
+  , _food   :: !(Int, Int)
+  , _score  :: !Int
+  , _phase  :: !Phase
   } deriving (Show, Eq)
 
 snake :: Lens Model [(Int, Int)]
@@ -64,7 +62,7 @@ phase = lens _phase $ \r x -> r { _phase = x }
 
 data Action
   = Tick
-  | Turn Arrows
+  | Turn Dir
   | PlaceFood (Int, Int)
   | NewGame
   | NoOp
@@ -72,9 +70,9 @@ data Action
 
 main :: IO ()
 #ifdef INTERACTIVE
-main = live defaultEvents app
+main = reload mempty app
 #else
-main = startApp defaultEvents app
+main = startApp mempty app
 #endif
 
 #ifdef WASM
@@ -102,9 +100,14 @@ emptyModel = Model
 app :: App Model Action
 app = (component emptyModel updateModel viewModel)
   { subs =
-    [ arrowsSub Turn
-    , \sink -> keyboardSub (\keys -> if IS.member 78 keys then NewGame else NoOp) sink
-    , \sink -> forever $ threadDelay 150000 >> sink Tick
+    [ \sink -> forever (threadDelay 120000 >> sink Tick)
+    , \sink -> windowSub "keydown" keycodeDecoder (\case
+        KeyCode 37 -> Turn DLeft
+        KeyCode 38 -> Turn DUp
+        KeyCode 39 -> Turn DRight
+        KeyCode 40 -> Turn DDown
+        KeyCode 78 -> NewGame
+        _ -> NoOp) sink
     ]
   }
 
@@ -144,13 +147,10 @@ updateModel = \case
 
   PlaceFood pos -> food .= pos
 
-  Turn arrows ->
-    case toDir arrows of
-      Nothing -> pure ()
-      Just d  -> do
-        m <- get
-        when (_phase m == NotStarted) $ phase .= Playing
-        when (d /= opposite (_dir m)) $ queued .= d
+  Turn d -> do
+    m <- get
+    when (_phase m == NotStarted) (phase .= Playing)
+    when (d /= opposite (_dir m)) (queued .= d)
 
   Tick -> do
     m <- get
@@ -202,6 +202,7 @@ viewModel _ m =
       , overflow "hidden"
       ]
     ]
+
     [ H.style_ [] "html,body{margin:0;padding:0;overflow:hidden;}"
     , H.h1_
         [ style_
