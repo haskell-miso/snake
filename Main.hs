@@ -8,6 +8,11 @@ module Main where
 ----------------------------------------------------------------------------
 import           Control.Concurrent (threadDelay)
 import           Control.Monad (forever, when)
+import           Data.Foldable (toList)
+import           Data.Sequence (Seq, ViewL(..), ViewR(..))
+import qualified Data.Sequence as Seq
+import           Data.Set (Set)
+import qualified Data.Set as Set
 ----------------------------------------------------------------------------
 import           Miso hiding (Phase)
 import           Miso.CSS hiding (ms, background, Phase)
@@ -34,16 +39,20 @@ data Dir = DUp | DDown | DLeft | DRight deriving (Show, Eq)
 data Phase = NotStarted | Playing | GameOver deriving (Show, Eq)
 
 data Model = Model
-  { _snake  :: ![(Int, Int)]
-  , _dir    :: !Dir
-  , _queued :: !Dir
-  , _food   :: !(Int, Int)
-  , _score  :: !Int
-  , _phase  :: !Phase
+  { _snake    :: !(Seq (Int, Int))
+  , _occupied :: !(Set (Int, Int))
+  , _dir      :: !Dir
+  , _queued   :: !Dir
+  , _food     :: !(Int, Int)
+  , _score    :: !Int
+  , _phase    :: !Phase
   } deriving (Show, Eq)
 
-snake :: Lens Model [(Int, Int)]
+snake :: Lens Model (Seq (Int, Int))
 snake = lens _snake $ \r x -> r { _snake = x }
+
+occupied :: Lens Model (Set (Int, Int))
+occupied = lens _occupied $ \r x -> r { _occupied = x }
 
 dir :: Lens Model Dir
 dir = lens _dir $ \r x -> r { _dir = x }
@@ -81,20 +90,24 @@ foreign export javascript "hs_start" main :: IO ()
 #endif
 #endif
 
-initSnake :: [(Int, Int)]
-initSnake = [(10,10),(9,10),(8,10)]
+initSnake :: Seq (Int, Int)
+initSnake = Seq.fromList [(10,10),(9,10),(8,10)]
+
+initOccupied :: Set (Int, Int)
+initOccupied = Set.fromList [(10,10),(9,10),(8,10)]
 
 initFood :: (Int, Int)
 initFood = (15,10)
 
 emptyModel :: Model
 emptyModel = Model
-  { _snake  = initSnake
-  , _dir    = DRight
-  , _queued = DRight
-  , _food   = initFood
-  , _score  = 0
-  , _phase  = NotStarted
+  { _snake    = initSnake
+  , _occupied = initOccupied
+  , _dir      = DRight
+  , _queued   = DRight
+  , _food     = initFood
+  , _score    = 0
+  , _phase    = NotStarted
   }
 
 app :: App Model Action
@@ -130,12 +143,12 @@ step DDown  (x,y) = (x, y+1)
 step DLeft  (x,y) = (x-1, y)
 step DRight (x,y) = (x+1, y)
 
-pickFood :: [(Int, Int)] -> IO (Int, Int)
-pickFood body = do
+pickFood :: Set (Int, Int) -> IO (Int, Int)
+pickFood occ = do
   [rx, ry] <- replicateRM 2
   let x = floor (rx * fromIntegral gridSize) `mod` gridSize
       y = floor (ry * fromIntegral gridSize) `mod` gridSize
-  if (x, y) `elem` body then pickFood body else pure (x, y)
+  if Set.member (x, y) occ then pickFood occ else pure (x, y)
 
 updateModel :: Action -> Effect parent props Model Action
 updateModel = \case
@@ -143,7 +156,7 @@ updateModel = \case
 
   NewGame -> do
     put emptyModel { _phase = Playing }
-    io $ pickFood initSnake >>= pure . PlaceFood
+    io $ pickFood initOccupied >>= pure . PlaceFood
 
   PlaceFood pos -> food .= pos
 
@@ -160,20 +173,27 @@ updateModel = \case
       Playing    -> do
         let d        = _queued m
             body     = _snake m
-            newHead  = step d (head body)
+            occ      = _occupied m
+            newHead  = case Seq.viewl body of h :< _ -> step d h; _ -> (0,0)
             (nx, ny) = newHead
             wall     = nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize
-            self     = newHead `elem` tail body
+            self     = Set.member newHead occ
         dir .= d
         if wall || self
           then phase .= GameOver
-          else do
-            let ate     = newHead == _food m
-                newBody = if ate then newHead : body else newHead : init body
-            snake .= newBody
-            when ate $ do
-              score += 1
-              io $ pickFood newBody >>= pure . PlaceFood
+          else case Seq.viewr body of
+            EmptyR -> pure ()
+            init' :> tailCell -> do
+              let ate     = newHead == _food m
+                  newBody | ate       = newHead Seq.<| body
+                          | otherwise = newHead Seq.<| init'
+                  newOcc  | ate       = Set.insert newHead occ
+                          | otherwise = Set.insert newHead (Set.delete tailCell occ)
+              snake    .= newBody
+              occupied .= newOcc
+              when ate $ do
+                score += 1
+                io $ pickFood newOcc >>= pure . PlaceFood
 
 ----------------------------------------------------------------------------
 -- View
@@ -353,9 +373,10 @@ renderFood (fx, fy) =
           ]
       ]
 
-renderSnake :: [(Int, Int)] -> [View Model Action]
-renderSnake []     = []
-renderSnake (h:tl) = map renderBody (reverse tl) ++ [renderHead h]
+renderSnake :: Seq (Int, Int) -> [View Model Action]
+renderSnake body = case Seq.viewl body of
+  EmptyL  -> []
+  h :< tl -> map renderBody (toList (Seq.reverse tl)) ++ [renderHead h]
 
 renderHead :: (Int, Int) -> View Model Action
 renderHead (hx, hy) =
