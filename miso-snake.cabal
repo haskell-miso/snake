@@ -1,0 +1,22 @@
+name:                miso-snake
+version:             0.1.0.0
+synopsis:            Snake game, using miso
+license:             MIT
+license-file:        LICENSE
+category:            Web
+build-type:          Simple
+cabal-version:       >=1.10
+
+executable app
+  if arch(wasm32)
+    cpp-options:
+      -DWASM
+    ghc-options:
+      -no-hs-main -optl-mexec-model=reactor "-optl-Wl,--export=hs_start"
+
+  ghc-options:
+    -funbox-strict-fields -O2 -ferror-spans -fspecialise-aggressively -Wall
+
+  main-is:             Main.hs
+  build-depends:       base, containers, miso
+  default-language:    Haskell2010
