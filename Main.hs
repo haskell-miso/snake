@@ -94,9 +94,9 @@ data Action
 
 main :: IO ()
 #ifdef INTERACTIVE
-main = reload mempty app
+main = reload pointerEvents app
 #else
-main = startApp mempty app
+main = startApp pointerEvents app
 #endif
 
 #ifdef WASM
@@ -224,7 +224,7 @@ viewModel _ m =
       , flexDirection "column"
       , alignItems "center"
       , justifyContent "center"
-      , height (vh 100.0)
+      , height "100dvh"
       , margin "0"
       , padding "0"
       , backgroundColor (Hex "0d0d1a")
@@ -234,7 +234,13 @@ viewModel _ m =
       ]
     ]
 
-    [ H.style_ [] "html,body{margin:0;padding:0;overflow:hidden;}"
+    [ H.style_ []
+        (  "html,body{margin:0;padding:0;overflow:hidden;overscroll-behavior:none;}"
+        <> ".board{touch-action:none;width:min(482px,calc(100vw - 16px));height:auto;}"
+        <> ".dpad{display:none;}"
+        <> "@media(pointer:coarse){.dpad{display:grid!important;}}"
+        <> "button{-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;}"
+        )
     , H.h1_
         [ style_
           [ margin "0 0 8px 0"
@@ -268,6 +274,7 @@ viewModel _ m =
             [ text ("SCORE  " <> ms (_score m)) ]
         ]
     , board m
+    , dpad
     , H.div_
         [ style_
           [ marginTop "12px"
@@ -276,13 +283,14 @@ viewModel _ m =
           , letterSpacing "0.1em"
           ]
         ]
-        [ text "ARROW KEYS — MOVE    N — NEW GAME" ]
+        [ text "ARROWS / D-PAD — MOVE    N — NEW GAME" ]
     ]
 
 board :: Model -> View Model Action
 board m =
   S.svg_
-    [ HP.width_  (si (boardPx + 2))
+    [ HP.class_ "board"
+    , HP.width_  (si (boardPx + 2))
     , HP.height_ (si (boardPx + 2))
     , SP.viewBox_ ("0 0 " <> si (boardPx + 2) <> " " <> si (boardPx + 2))
     , style_
@@ -451,12 +459,12 @@ renderBody isNew i (bx, by) =
 overlay :: Model -> View Model Action
 overlay m = case _phase m of
   Playing    -> S.g_ [] []
-  NotStarted -> overlayBox "PRESS ANY ARROW KEY" "TO BEGIN" "#4ade80"
-  GameOver   -> overlayBox "GAME OVER" "PRESS N TO RESTART" "#f87171"
+  NotStarted -> overlayBox "TAP TO BEGIN" "OR PRESS AN ARROW KEY" "#4ade80" (Turn DRight)
+  GameOver   -> overlayBox "GAME OVER" "TAP OR PRESS N" "#f87171" NewGame
 
-overlayBox :: MisoString -> MisoString -> MisoString -> View Model Action
-overlayBox title sub clr =
-  S.g_ []
+overlayBox :: MisoString -> MisoString -> MisoString -> Action -> View Model Action
+overlayBox title sub clr act =
+  S.g_ [ H.onPointerDown (const act), style_ [ cursor "pointer" ] ]
     [ S.rect_
         [ SP.x_ "0", SP.y_ "0"
         , HP.width_ (si (boardPx + 2)), HP.height_ (si (boardPx + 2))
@@ -484,4 +492,41 @@ overlayBox title sub clr =
         , SP.letterSpacing_ "2"
         ] [ text sub ]
     ]
+
+dpad :: View Model Action
+dpad =
+  H.div_
+    [ HP.class_ "dpad"
+    , style_
+      [ gridTemplateColumns "repeat(3, 56px)"
+      , gridTemplateRows "repeat(3, 56px)"
+      , gap "4px"
+      , marginTop "12px"
+      ]
+    ]
+    [ H.div_ [] [], btn DUp "\x25b2",    H.div_ [] []
+    , btn DLeft "\x25c4", H.div_ [] [], btn DRight "\x25ba"
+    , H.div_ [] [], btn DDown "\x25bc",  H.div_ [] []
+    ]
+  where
+    btn d lbl =
+      H.button_
+        [ H.onPointerDown (const (Turn d))
+        , style_
+          [ width "100%"
+          , height "100%"
+          , borderRadius "10px"
+          , backgroundColor (RGBA 74 222 128 0.12)
+          , border "1px solid rgba(74,222,128,0.25)"
+          , color (Hex "4ade80")
+          , fontSize (px 20)
+          , cursor "pointer"
+          , display "flex"
+          , alignItems "center"
+          , justifyContent "center"
+          , padding "0"
+          , boxSizing "border-box"
+          ]
+        ]
+        [ text lbl ]
 ----------------------------------------------------------------------------
