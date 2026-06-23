@@ -39,6 +39,10 @@ boardPx = gridSize * cellSize
 tickInterval :: Double
 tickInterval = 175.0
 
+-- CSS transition string derived from tickInterval so they stay in sync.
+segTransition :: Style
+segTransition = transition ("transform " <> ms (round tickInterval :: Int) <> "ms linear")
+
 data Dir = DUp | DDown | DLeft | DRight deriving (Show, Eq)
 
 data Phase = NotStarted | Playing | GameOver deriving (Show, Eq)
@@ -411,11 +415,14 @@ renderFood (fx, fy) =
 -- eating. Body segments follow head-to-tail; the segment at index >= prevLen
 -- is newly grown and gets transition:none so it pops in at the old tail
 -- position instead of flying from the SVG origin.
+-- key_ is set on every element so Miso uses key-based reconciliation
+-- (requires ALL siblings to have keys; without key_ it falls back to
+-- position-based matching which also works but is less robust).
 renderSnake :: Int -> Seq (Int, Int) -> [View Model Action]
 renderSnake pl body = zipWith render [0..] (toList body)
   where
     render 0 pos = renderHead pos
-    render i pos = renderBody (i >= pl) pos
+    render i pos = renderBody (i >= pl) i pos
 
 renderHead :: (Int, Int) -> View Model Action
 renderHead (hx, hy) =
@@ -425,7 +432,9 @@ renderHead (hx, hy) =
       sz  = cellSize - 2 * pad
       tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
   in S.g_
-      [ style_ [ transform tx, transition "transform 175ms linear" ] ]
+      [ key_ (0 :: Int)
+      , style_ [ transform tx, segTransition ]
+      ]
       [ S.rect_
           [ SP.x_ (si pad), SP.y_ (si pad)
           , HP.width_ (si sz), HP.height_ (si sz)
@@ -435,17 +444,19 @@ renderHead (hx, hy) =
           ]
       ]
 
-renderBody :: Bool -> (Int, Int) -> View Model Action
-renderBody isNew (bx, by) =
+renderBody :: Bool -> Int -> (Int, Int) -> View Model Action
+renderBody isNew i (bx, by) =
   let px  = svgCoord bx
       py  = svgCoord by
       pad = 2
       sz  = cellSize - 2 * pad
       tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
       st  | isNew     = [ transform tx ]
-          | otherwise = [ transform tx, transition "transform 175ms linear" ]
+          | otherwise = [ transform tx, segTransition ]
   in S.g_
-      [ style_ st ]
+      [ key_ i
+      , style_ st
+      ]
       [ S.rect_
           [ SP.x_ (si pad), SP.y_ (si pad)
           , HP.width_ (si sz), HP.height_ (si sz)
