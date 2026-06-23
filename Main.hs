@@ -37,7 +37,7 @@ boardPx :: Int
 boardPx = gridSize * cellSize
 
 tickInterval :: Double
-tickInterval = 175.0
+tickInterval = 160.0
 
 -- CSS transition string derived from tickInterval so they stay in sync.
 segTransition :: Style
@@ -170,10 +170,10 @@ opposite DLeft  = DRight
 opposite DRight = DLeft
 
 step :: Dir -> (Int, Int) -> (Int, Int)
-step DUp    (x,y) = (x, y-1)
-step DDown  (x,y) = (x, y+1)
-step DLeft  (x,y) = (x-1, y)
-step DRight (x,y) = (x+1, y)
+step DUp    (x,y) = (x, (y - 1) `mod` gridSize)
+step DDown  (x,y) = (x, (y + 1) `mod` gridSize)
+step DLeft  (x,y) = ((x - 1) `mod` gridSize, y)
+step DRight (x,y) = ((x + 1) `mod` gridSize, y)
 
 pickFood :: Set (Int, Int) -> IO (Int, Int)
 pickFood occ = do
@@ -207,13 +207,11 @@ updateModel = \case
             body     = _snake m
             occ      = _occupied m
             headPos  = case Seq.viewl body of h :< _ -> h; _ -> (0,0)
-            newHead  = step d headPos
-            (nx, ny) = newHead
-            wall     = nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize
-            self     = Set.member newHead occ
+            newHead = step d headPos
+            self    = Set.member newHead occ
         dir     .= d
         prevLen .= Seq.length body
-        if wall || self
+        if self
           then phase .= GameOver
           else case Seq.viewr body of
             EmptyR -> pure ()
