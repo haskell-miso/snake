@@ -380,16 +380,20 @@ renderSnake body = case Seq.viewl body of
 
 renderHead :: (Int, Int) -> View Model Action
 renderHead (hx, hy) =
-  let px = svgCoord hx
-      py = svgCoord hy
+  let px  = svgCoord hx
+      py  = svgCoord hy
       pad = 1
       sz  = cellSize - 2 * pad
-  in S.rect_
-      [ SP.x_ (si (px + pad)), SP.y_ (si (py + pad))
-      , HP.width_ (si sz), HP.height_ (si sz)
-      , SP.rx_ "6", SP.ry_ "6"
-      , SP.fill_ "url(#headGrad)"
-      , SP.filter_ "url(#glow)"
+      tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
+  in S.g_
+      [ style_ [ transform tx, transition "transform 70ms linear" ] ]
+      [ S.rect_
+          [ SP.x_ (si pad), SP.y_ (si pad)
+          , HP.width_ (si sz), HP.height_ (si sz)
+          , SP.rx_ "6", SP.ry_ "6"
+          , SP.fill_ "url(#headGrad)"
+          , SP.filter_ "url(#glow)"
+          ]
       ]
 
 renderBody :: (Int, Int) -> View Model Action
@@ -398,11 +402,15 @@ renderBody (bx, by) =
       py  = svgCoord by
       pad = 2
       sz  = cellSize - 2 * pad
-  in S.rect_
-      [ SP.x_ (si (px + pad)), SP.y_ (si (py + pad))
-      , HP.width_ (si sz), HP.height_ (si sz)
-      , SP.rx_ "4", SP.ry_ "4"
-      , SP.fill_ "url(#bodyGrad)"
+      tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
+  in S.g_
+      [ style_ [ transform tx, transition "transform 70ms linear" ] ]
+      [ S.rect_
+          [ SP.x_ (si pad), SP.y_ (si pad)
+          , HP.width_ (si sz), HP.height_ (si sz)
+          , SP.rx_ "4", SP.ry_ "4"
+          , SP.fill_ "url(#bodyGrad)"
+          ]
       ]
 
 overlay :: Model -> View Model Action
