@@ -6,8 +6,9 @@
 ----------------------------------------------------------------------------
 module Main where
 ----------------------------------------------------------------------------
-import           Control.Monad (when)
+import           Control.Monad (void, when)
 import           Data.Foldable (toList)
+import           Data.IORef
 import           Data.Sequence (Seq, ViewL(..), ViewR(..))
 import qualified Data.Sequence as Seq
 import           Data.Set (Set)
@@ -15,6 +16,7 @@ import qualified Data.Set as Set
 ----------------------------------------------------------------------------
 import           Miso hiding (Phase)
 import           Miso.CSS hiding (ms, background, Phase)
+import           Miso.DSL (syncCallback1, requestAnimationFrame, fromJSValUnchecked, freeFunction, Function(..))
 import qualified Miso.Html as H
 import qualified Miso.Html.Property as HP
 import qualified Miso.Svg as S
@@ -22,7 +24,7 @@ import qualified Miso.Svg.Property as SP
 import           Miso.Lens
 import           Miso.Random (replicateRM)
 import           Miso.Reload
-import           Miso.Subscription.RAF (rAFSubElapsed)
+import           Miso.Subscription.Util (createSub)
 ----------------------------------------------------------------------------
 
 gridSize :: Int
@@ -121,6 +123,31 @@ emptyModel = Model
   , _phase    = NotStarted
   , _prevLen  = Seq.length initSnake
   }
+
+rAFSubElapsed :: Double -> action -> Sub action
+rAFSubElapsed interval action sink = createSub acquire release sink
+  where
+    acquire = do
+      cbRef   <- newIORef (error "rAFSubElapsed: uninitialized, impossible")
+      lastRef <- newIORef (0.0 :: Double)
+      elapRef <- newIORef (0.0 :: Double)
+      callback <- syncCallback1 $ \jsval -> do
+        t    <- fromJSValUnchecked jsval
+        prev <- readIORef lastRef
+        writeIORef lastRef t
+        let dt = if prev == 0 then 0 else min interval (t - prev)
+        elap <- readIORef elapRef
+        let newElap = elap + dt
+        if newElap >= interval
+          then do
+            writeIORef elapRef (newElap - interval)
+            sink action
+          else writeIORef elapRef newElap
+        void (requestAnimationFrame =<< readIORef cbRef)
+      writeIORef cbRef callback
+      void (requestAnimationFrame callback)
+      pure callback
+    release callback = freeFunction (Function callback)
 
 app :: App Model Action
 app = (component emptyModel updateModel viewModel)
