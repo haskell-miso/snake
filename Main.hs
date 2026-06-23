@@ -6,9 +6,9 @@
 ----------------------------------------------------------------------------
 module Main where
 ----------------------------------------------------------------------------
-import           Control.Monad (void, when)
+import           Control.Concurrent (threadDelay)
+import           Control.Monad (forever, when)
 import           Data.Foldable (toList)
-import           Data.IORef
 import           Data.Sequence (Seq, ViewL(..), ViewR(..))
 import qualified Data.Sequence as Seq
 import           Data.Set (Set)
@@ -16,7 +16,6 @@ import qualified Data.Set as Set
 ----------------------------------------------------------------------------
 import           Miso hiding (Phase)
 import           Miso.CSS hiding (ms, background, Phase)
-import           Miso.DSL (syncCallback1, requestAnimationFrame, fromJSValUnchecked, freeFunction, Function(..))
 import qualified Miso.Html as H
 import qualified Miso.Html.Property as HP
 import qualified Miso.Svg as S
@@ -24,7 +23,6 @@ import qualified Miso.Svg.Property as SP
 import           Miso.Lens
 import           Miso.Random (replicateRM)
 import           Miso.Reload
-import           Miso.Subscription.Util (createSub)
 ----------------------------------------------------------------------------
 
 gridSize :: Int
@@ -129,29 +127,10 @@ emptyModel = Model
   , _prevSnake = initSnake
   }
 
-rAFSubElapsed :: Double -> action -> Sub action
-rAFSubElapsed interval action sink = createSub acquire release sink
-  where
-    acquire = do
-      cbRef <- newIORef (error "rAFSubElapsed: uninitialized, impossible")
-      let go lastT elap = do
-            cb <- syncCallback1 $ \jsval -> do
-              t <- fromJSValUnchecked jsval
-              let dt      = if lastT == 0 then 0 else min interval (t - lastT)
-                  newElap = elap + dt
-              if newElap >= interval
-                then sink action *> go t (newElap - interval)
-                else go t newElap
-            writeIORef cbRef cb
-            void (requestAnimationFrame cb)
-      go 0 0
-      pure cbRef
-    release cbRef = freeFunction . Function =<< readIORef cbRef
-
 app :: App Model Action
 app = (component emptyModel updateModel viewModel)
   { subs =
-    [ rAFSubElapsed tickInterval Tick
+    [ \sink -> forever (threadDelay (round (tickInterval * 1000)) >> sink Tick)
     , \sink -> windowSub "keydown" keycodeDecoder (\case
         KeyCode 37 -> Turn DLeft
         KeyCode 38 -> Turn DUp
