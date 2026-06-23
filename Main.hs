@@ -46,6 +46,7 @@ data Model = Model
   , _food     :: !(Int, Int)
   , _score    :: !Int
   , _phase    :: !Phase
+  , _justAte  :: !Bool
   } deriving (Show, Eq)
 
 snake :: Lens Model (Seq (Int, Int))
@@ -68,6 +69,9 @@ score = lens _score $ \r x -> r { _score = x }
 
 phase :: Lens Model Phase
 phase = lens _phase $ \r x -> r { _phase = x }
+
+justAte :: Lens Model Bool
+justAte = lens _justAte $ \r x -> r { _justAte = x }
 
 data Action
   = Tick
@@ -108,12 +112,13 @@ emptyModel = Model
   , _food     = initFood
   , _score    = 0
   , _phase    = NotStarted
+  , _justAte  = False
   }
 
 app :: App Model Action
 app = (component emptyModel updateModel viewModel)
   { subs =
-    [ \sink -> forever (threadDelay 140000 >> sink Tick)
+    [ \sink -> forever (threadDelay 200000 >> sink Tick)
     , \sink -> windowSub "keydown" keycodeDecoder (\case
         KeyCode 37 -> Turn DLeft
         KeyCode 38 -> Turn DUp
@@ -191,6 +196,7 @@ updateModel = \case
                           | otherwise = Set.insert newHead (Set.delete tailCell occ)
               snake    .= newBody
               occupied .= newOcc
+              justAte  .= ate
               when ate $ do
                 score += 1
                 io $ pickFood newOcc >>= pure . PlaceFood
@@ -283,7 +289,7 @@ board m =
     : background
     : gridLines
    ++ [renderFood (_food m)]
-   ++ renderSnake (_snake m)
+   ++ renderSnake (_justAte m) (_snake m)
    ++ [overlay m]
     )
 
@@ -373,20 +379,22 @@ renderFood (fx, fy) =
           ]
       ]
 
-renderSnake :: Seq (Int, Int) -> [View Model Action]
-renderSnake body = case Seq.viewl body of
+renderSnake :: Bool -> Seq (Int, Int) -> [View Model Action]
+renderSnake ate body = case Seq.viewl body of
   EmptyL  -> []
-  h :< tl -> map renderBody (toList (Seq.reverse tl)) ++ [renderHead h]
+  h :< tl -> map renderBody (toList (Seq.reverse tl)) ++ [renderHead ate h]
 
-renderHead :: (Int, Int) -> View Model Action
-renderHead (hx, hy) =
+renderHead :: Bool -> (Int, Int) -> View Model Action
+renderHead ate (hx, hy) =
   let px  = svgCoord hx
       py  = svgCoord hy
       pad = 1
       sz  = cellSize - 2 * pad
       tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
+      -- suppress transition on the tick the head is newly inserted (after eating)
+      trans = if ate then "none" else "transform 200ms linear"
   in S.g_
-      [ style_ [ transform tx, transition "transform 140ms linear" ] ]
+      [ style_ [ transform tx, transition trans ] ]
       [ S.rect_
           [ SP.x_ (si pad), SP.y_ (si pad)
           , HP.width_ (si sz), HP.height_ (si sz)
@@ -404,7 +412,7 @@ renderBody (bx, by) =
       sz  = cellSize - 2 * pad
       tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
   in S.g_
-      [ style_ [ transform tx, transition "transform 140ms linear" ] ]
+      [ style_ [ transform tx, transition "transform 200ms linear" ] ]
       [ S.rect_
           [ SP.x_ (si pad), SP.y_ (si pad)
           , HP.width_ (si sz), HP.height_ (si sz)
