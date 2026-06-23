@@ -48,15 +48,15 @@ data Dir = DUp | DDown | DLeft | DRight deriving (Show, Eq)
 data Phase = NotStarted | Playing | GameOver deriving (Show, Eq)
 
 data Model = Model
-  { _snake       :: !(Seq (Int, Int))
-  , _occupied    :: !(Set (Int, Int))
-  , _dir         :: !Dir
-  , _queued      :: !Dir
-  , _food        :: !(Int, Int)
-  , _score       :: !Int
-  , _phase       :: !Phase
-  , _prevLen     :: !Int  -- snake length at start of last tick; suppresses CSS transition on newly-grown segments
-  , _headWrapped :: !Bool -- head wrapped around a wall this tick; suppresses CSS transition on the head
+  { _snake     :: !(Seq (Int, Int))
+  , _occupied  :: !(Set (Int, Int))
+  , _dir       :: !Dir
+  , _queued    :: !Dir
+  , _food      :: !(Int, Int)
+  , _score     :: !Int
+  , _phase     :: !Phase
+  , _prevLen   :: !Int          -- snake length at start of last tick; suppresses CSS transition on newly-grown segments
+  , _prevSnake :: !(Seq (Int, Int))  -- positions from last tick; per-segment jump detection for wall wraps
   } deriving (Show, Eq)
 
 snake :: Lens Model (Seq (Int, Int))
@@ -83,8 +83,8 @@ phase = lens _phase $ \r x -> r { _phase = x }
 prevLen :: Lens Model Int
 prevLen = lens _prevLen $ \r x -> r { _prevLen = x }
 
-headWrapped :: Lens Model Bool
-headWrapped = lens _headWrapped $ \r x -> r { _headWrapped = x }
+prevSnake :: Lens Model (Seq (Int, Int))
+prevSnake = lens _prevSnake $ \r x -> r { _prevSnake = x }
 
 data Action
   = Tick
@@ -118,15 +118,15 @@ initFood = (15,10)
 
 emptyModel :: Model
 emptyModel = Model
-  { _snake       = initSnake
-  , _occupied    = initOccupied
-  , _dir         = DRight
-  , _queued      = DRight
-  , _food        = initFood
-  , _score       = 0
-  , _phase       = NotStarted
-  , _prevLen     = Seq.length initSnake
-  , _headWrapped = False
+  { _snake     = initSnake
+  , _occupied  = initOccupied
+  , _dir       = DRight
+  , _queued    = DRight
+  , _food      = initFood
+  , _score     = 0
+  , _phase     = NotStarted
+  , _prevLen   = Seq.length initSnake
+  , _prevSnake = initSnake
   }
 
 rAFSubElapsed :: Double -> action -> Sub action
@@ -206,13 +206,11 @@ updateModel = \case
             body     = _snake m
             occ      = _occupied m
             headPos  = case Seq.viewl body of h :< _ -> h; _ -> (0,0)
-            newHead  = step d headPos
-            self     = Set.member newHead occ
-            wrapped  = abs (fst newHead - fst headPos) > 1
-                    || abs (snd newHead - snd headPos) > 1
-        dir         .= d
-        prevLen     .= Seq.length body
-        headWrapped .= wrapped
+            newHead = step d headPos
+            self    = Set.member newHead occ
+        dir       .= d
+        prevLen   .= Seq.length body
+        prevSnake .= body
         if self
           then phase .= GameOver
           else case Seq.viewr body of
@@ -317,7 +315,7 @@ board m =
     : background
     : gridLines
    ++ [renderFood (_food m)]
-   ++ renderSnake (_prevLen m) (_headWrapped m) (_snake m)
+   ++ renderSnake (_prevLen m) (_prevSnake m) (_snake m)
    ++ [overlay m]
     )
 
@@ -415,20 +413,27 @@ renderFood (fx, fy) =
 -- key_ is set on every element so Miso uses key-based reconciliation
 -- (requires ALL siblings to have keys; without key_ it falls back to
 -- position-based matching which also works but is less robust).
-renderSnake :: Int -> Bool -> Seq (Int, Int) -> [View Model Action]
-renderSnake pl hw body = zipWith render [0..] (toList body)
+-- Suppress transition for a segment whenever its position delta > 1,
+-- which happens on the tick a segment steps into a wrapped position.
+-- This covers the head on the wrap tick AND every body segment on the
+-- subsequent ticks as the wrapped position propagates down the snake.
+renderSnake :: Int -> Seq (Int, Int) -> Seq (Int, Int) -> [View Model Action]
+renderSnake pl prev curr =
+  let prevList = toList prev ++ repeat (0, 0)
+  in zipWith3 render [0..] prevList (toList curr)
   where
-    render 0 pos = renderHead hw pos
-    render i pos = renderBody (i >= pl) i pos
+    jumped (px, py) (cx, cy) = abs (cx - px) > 1 || abs (cy - py) > 1
+    render 0 p c = renderHead (jumped p c) c
+    render i p c = renderBody (i >= pl || jumped p c) i c
 
 renderHead :: Bool -> (Int, Int) -> View Model Action
-renderHead wrapped (hx, hy) =
+renderHead suppress (hx, hy) =
   let px  = svgCoord hx
       py  = svgCoord hy
       pad = 1
       sz  = cellSize - 2 * pad
       tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
-      st  | wrapped   = [ transform tx ]
+      st  | suppress  = [ transform tx ]
           | otherwise = [ transform tx, segTransition ]
   in S.g_
       [ key_ (0 :: Int)
