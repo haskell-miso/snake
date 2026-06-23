@@ -48,14 +48,15 @@ data Dir = DUp | DDown | DLeft | DRight deriving (Show, Eq)
 data Phase = NotStarted | Playing | GameOver deriving (Show, Eq)
 
 data Model = Model
-  { _snake    :: !(Seq (Int, Int))
-  , _occupied :: !(Set (Int, Int))
-  , _dir      :: !Dir
-  , _queued   :: !Dir
-  , _food     :: !(Int, Int)
-  , _score    :: !Int
-  , _phase    :: !Phase
-  , _prevLen  :: !Int   -- snake length at start of last tick; used to suppress CSS transition on newly-grown segments
+  { _snake       :: !(Seq (Int, Int))
+  , _occupied    :: !(Set (Int, Int))
+  , _dir         :: !Dir
+  , _queued      :: !Dir
+  , _food        :: !(Int, Int)
+  , _score       :: !Int
+  , _phase       :: !Phase
+  , _prevLen     :: !Int  -- snake length at start of last tick; suppresses CSS transition on newly-grown segments
+  , _headWrapped :: !Bool -- head wrapped around a wall this tick; suppresses CSS transition on the head
   } deriving (Show, Eq)
 
 snake :: Lens Model (Seq (Int, Int))
@@ -81,6 +82,9 @@ phase = lens _phase $ \r x -> r { _phase = x }
 
 prevLen :: Lens Model Int
 prevLen = lens _prevLen $ \r x -> r { _prevLen = x }
+
+headWrapped :: Lens Model Bool
+headWrapped = lens _headWrapped $ \r x -> r { _headWrapped = x }
 
 data Action
   = Tick
@@ -114,14 +118,15 @@ initFood = (15,10)
 
 emptyModel :: Model
 emptyModel = Model
-  { _snake    = initSnake
-  , _occupied = initOccupied
-  , _dir      = DRight
-  , _queued   = DRight
-  , _food     = initFood
-  , _score    = 0
-  , _phase    = NotStarted
-  , _prevLen  = Seq.length initSnake
+  { _snake       = initSnake
+  , _occupied    = initOccupied
+  , _dir         = DRight
+  , _queued      = DRight
+  , _food        = initFood
+  , _score       = 0
+  , _phase       = NotStarted
+  , _prevLen     = Seq.length initSnake
+  , _headWrapped = False
   }
 
 rAFSubElapsed :: Double -> action -> Sub action
@@ -201,10 +206,13 @@ updateModel = \case
             body     = _snake m
             occ      = _occupied m
             headPos  = case Seq.viewl body of h :< _ -> h; _ -> (0,0)
-            newHead = step d headPos
-            self    = Set.member newHead occ
-        dir     .= d
-        prevLen .= Seq.length body
+            newHead  = step d headPos
+            self     = Set.member newHead occ
+            wrapped  = abs (fst newHead - fst headPos) > 1
+                    || abs (snd newHead - snd headPos) > 1
+        dir         .= d
+        prevLen     .= Seq.length body
+        headWrapped .= wrapped
         if self
           then phase .= GameOver
           else case Seq.viewr body of
@@ -309,7 +317,7 @@ board m =
     : background
     : gridLines
    ++ [renderFood (_food m)]
-   ++ renderSnake (_prevLen m) (_snake m)
+   ++ renderSnake (_prevLen m) (_headWrapped m) (_snake m)
    ++ [overlay m]
     )
 
@@ -407,22 +415,24 @@ renderFood (fx, fy) =
 -- key_ is set on every element so Miso uses key-based reconciliation
 -- (requires ALL siblings to have keys; without key_ it falls back to
 -- position-based matching which also works but is less robust).
-renderSnake :: Int -> Seq (Int, Int) -> [View Model Action]
-renderSnake pl body = zipWith render [0..] (toList body)
+renderSnake :: Int -> Bool -> Seq (Int, Int) -> [View Model Action]
+renderSnake pl hw body = zipWith render [0..] (toList body)
   where
-    render 0 pos = renderHead pos
+    render 0 pos = renderHead hw pos
     render i pos = renderBody (i >= pl) i pos
 
-renderHead :: (Int, Int) -> View Model Action
-renderHead (hx, hy) =
+renderHead :: Bool -> (Int, Int) -> View Model Action
+renderHead wrapped (hx, hy) =
   let px  = svgCoord hx
       py  = svgCoord hy
       pad = 1
       sz  = cellSize - 2 * pad
       tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
+      st  | wrapped   = [ transform tx ]
+          | otherwise = [ transform tx, segTransition ]
   in S.g_
       [ key_ (0 :: Int)
-      , style_ [ transform tx, segTransition ]
+      , style_ st
       ]
       [ S.rect_
           [ SP.x_ (si pad), SP.y_ (si pad)
