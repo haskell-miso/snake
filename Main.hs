@@ -113,7 +113,7 @@ emptyModel = Model
 app :: App Model Action
 app = (component emptyModel updateModel viewModel)
   { subs =
-    [ \sink -> forever (threadDelay 70000 >> sink Tick)
+    [ \sink -> forever (threadDelay 140000 >> sink Tick)
     , \sink -> windowSub "keydown" keycodeDecoder (\case
         KeyCode 37 -> Turn DLeft
         KeyCode 38 -> Turn DUp
@@ -386,7 +386,7 @@ renderHead (hx, hy) =
       sz  = cellSize - 2 * pad
       tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
   in S.g_
-      [ style_ [ transform tx, transition "transform 70ms linear" ] ]
+      [ style_ [ transform tx, transition "transform 140ms linear" ] ]
       [ S.rect_
           [ SP.x_ (si pad), SP.y_ (si pad)
           , HP.width_ (si sz), HP.height_ (si sz)
@@ -404,7 +404,7 @@ renderBody (bx, by) =
       sz  = cellSize - 2 * pad
       tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
   in S.g_
-      [ style_ [ transform tx, transition "transform 70ms linear" ] ]
+      [ style_ [ transform tx, transition "transform 140ms linear" ] ]
       [ S.rect_
           [ SP.x_ (si pad), SP.y_ (si pad)
           , HP.width_ (si sz), HP.height_ (si sz)
