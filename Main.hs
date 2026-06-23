@@ -6,8 +6,7 @@
 ----------------------------------------------------------------------------
 module Main where
 ----------------------------------------------------------------------------
-import           Control.Concurrent (threadDelay)
-import           Control.Monad (forever, when)
+import           Control.Monad (when)
 import           Data.Foldable (toList)
 import           Data.Sequence (Seq, ViewL(..), ViewR(..))
 import qualified Data.Sequence as Seq
@@ -23,6 +22,7 @@ import qualified Miso.Svg.Property as SP
 import           Miso.Lens
 import           Miso.Random (replicateRM)
 import           Miso.Reload
+import           Miso.Subscription.RAF (rAFSub)
 ----------------------------------------------------------------------------
 
 gridSize :: Int
@@ -34,20 +34,24 @@ cellSize = 24
 boardPx :: Int
 boardPx = gridSize * cellSize
 
+tickInterval :: Double
+tickInterval = 175.0
+
 data Dir = DUp | DDown | DLeft | DRight deriving (Show, Eq)
 
 data Phase = NotStarted | Playing | GameOver deriving (Show, Eq)
 
 data Model = Model
-  { _snake    :: !(Seq (Int, Int))
-  , _occupied :: !(Set (Int, Int))
-  , _dir      :: !Dir
-  , _queued   :: !Dir
-  , _food     :: !(Int, Int)
-  , _score    :: !Int
-  , _phase    :: !Phase
-  , _justAte  :: !Bool
-  , _prevHead :: !(Int, Int)
+  { _snake     :: !(Seq (Int, Int))
+  , _occupied  :: !(Set (Int, Int))
+  , _dir       :: !Dir
+  , _queued    :: !Dir
+  , _food      :: !(Int, Int)
+  , _score     :: !Int
+  , _phase     :: !Phase
+  , _prevSnake :: !(Seq (Int, Int))  -- snake at the last game tick
+  , _elapsed   :: !Double             -- ms since last game tick
+  , _lastTime  :: !Double             -- RAF timestamp of the last frame
   } deriving (Show, Eq)
 
 snake :: Lens Model (Seq (Int, Int))
@@ -71,14 +75,17 @@ score = lens _score $ \r x -> r { _score = x }
 phase :: Lens Model Phase
 phase = lens _phase $ \r x -> r { _phase = x }
 
-justAte :: Lens Model Bool
-justAte = lens _justAte $ \r x -> r { _justAte = x }
+prevSnake :: Lens Model (Seq (Int, Int))
+prevSnake = lens _prevSnake $ \r x -> r { _prevSnake = x }
 
-prevHead :: Lens Model (Int, Int)
-prevHead = lens _prevHead $ \r x -> r { _prevHead = x }
+elapsed :: Lens Model Double
+elapsed = lens _elapsed $ \r x -> r { _elapsed = x }
+
+lastTime :: Lens Model Double
+lastTime = lens _lastTime $ \r x -> r { _lastTime = x }
 
 data Action
-  = Tick
+  = Frame Double
   | Turn Dir
   | PlaceFood (Int, Int)
   | NewGame
@@ -109,21 +116,22 @@ initFood = (15,10)
 
 emptyModel :: Model
 emptyModel = Model
-  { _snake    = initSnake
-  , _occupied = initOccupied
-  , _dir      = DRight
-  , _queued   = DRight
-  , _food     = initFood
-  , _score    = 0
-  , _phase    = NotStarted
-  , _justAte  = False
-  , _prevHead = (10, 10)
+  { _snake     = initSnake
+  , _occupied  = initOccupied
+  , _dir       = DRight
+  , _queued    = DRight
+  , _food      = initFood
+  , _score     = 0
+  , _phase     = NotStarted
+  , _prevSnake = initSnake
+  , _elapsed   = 0
+  , _lastTime  = 0
   }
 
 app :: App Model Action
 app = (component emptyModel updateModel viewModel)
   { subs =
-    [ \sink -> forever (threadDelay 175000 >> sink Tick)
+    [ rAFSub Frame
     , \sink -> windowSub "keydown" keycodeDecoder (\case
         KeyCode 37 -> Turn DLeft
         KeyCode 38 -> Turn DUp
@@ -139,13 +147,6 @@ opposite DUp    = DDown
 opposite DDown  = DUp
 opposite DLeft  = DRight
 opposite DRight = DLeft
-
-toDir :: Arrows -> Maybe Dir
-toDir (Arrows  0   1)  = Just DUp
-toDir (Arrows  0 (-1)) = Just DDown
-toDir (Arrows (-1)  0) = Just DLeft
-toDir (Arrows  1   0)  = Just DRight
-toDir _                = Nothing
 
 step :: Dir -> (Int, Int) -> (Int, Int)
 step DUp    (x,y) = (x, y-1)
@@ -175,38 +176,45 @@ updateModel = \case
     when (_phase m == NotStarted) (phase .= Playing)
     when (d /= opposite (_dir m)) (queued .= d)
 
-  Tick -> do
+  Frame t -> do
     m <- get
+    -- cap dt so a long pause doesn't fire multiple ticks at once
+    let dt      = if _lastTime m == 0 then 0 else min tickInterval (t - _lastTime m)
+        newElap = _elapsed m + dt
+    lastTime .= t
     case _phase m of
       NotStarted -> pure ()
       GameOver   -> pure ()
-      Playing    -> do
-        let d        = _queued m
-            body     = _snake m
-            occ      = _occupied m
-            headPos  = case Seq.viewl body of h :< _ -> h; _ -> (0,0)
-            newHead  = step d headPos
-            (nx, ny) = newHead
-            wall     = nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize
-            self     = Set.member newHead occ
-        dir .= d
-        if wall || self
-          then phase .= GameOver
-          else case Seq.viewr body of
-            EmptyR -> pure ()
-            init' :> tailCell -> do
-              let ate     = newHead == _food m
-                  newBody | ate       = newHead Seq.<| body
-                          | otherwise = newHead Seq.<| init'
-                  newOcc  | ate       = Set.insert newHead occ
-                          | otherwise = Set.insert newHead (Set.delete tailCell occ)
-              snake    .= newBody
-              occupied .= newOcc
-              justAte  .= ate
-              prevHead .= headPos
-              when ate $ do
-                score += 1
-                io $ pickFood newOcc >>= pure . PlaceFood
+      Playing    ->
+        if newElap < tickInterval
+          then elapsed .= newElap
+          else do
+            elapsed .= newElap - tickInterval
+            let d        = _queued m
+                body     = _snake m
+                occ      = _occupied m
+                headPos  = case Seq.viewl body of h :< _ -> h; _ -> (0,0)
+                newHead  = step d headPos
+                (nx, ny) = newHead
+                wall     = nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize
+                self     = Set.member newHead occ
+            dir      .= d
+            prevSnake .= body
+            if wall || self
+              then phase .= GameOver
+              else case Seq.viewr body of
+                EmptyR -> pure ()
+                init' :> tailCell -> do
+                  let ate     = newHead == _food m
+                      newBody | ate       = newHead Seq.<| body
+                              | otherwise = newHead Seq.<| init'
+                      newOcc  | ate       = Set.insert newHead occ
+                              | otherwise = Set.insert newHead (Set.delete tailCell occ)
+                  snake    .= newBody
+                  occupied .= newOcc
+                  when ate $ do
+                    score += 1
+                    io $ pickFood newOcc >>= pure . PlaceFood
 
 ----------------------------------------------------------------------------
 -- View
@@ -217,6 +225,26 @@ si = ms
 
 svgCoord :: Int -> Int
 svgCoord n = n * cellSize + 1
+
+svgCoordF :: Double -> Double
+svgCoordF n = n * fromIntegral cellSize + 1.0
+
+-- Interpolate between _prevSnake and _snake using _elapsed / tickInterval.
+-- Returns grid positions as Doubles; segments missing from prevSnake (new
+-- tail when eating) appear directly at their final position.
+interpolatedPositions :: Model -> [(Double, Double)]
+interpolatedPositions m =
+  let t    = min 1.0 (_elapsed m / tickInterval)
+      curr = toList (_snake m)
+      prev = toList (_prevSnake m)
+      interp i (cx, cy) =
+        case drop i prev of
+          (px, py):_ ->
+            ( fromIntegral px + (fromIntegral cx - fromIntegral px) * t
+            , fromIntegral py + (fromIntegral cy - fromIntegral py) * t
+            )
+          [] -> (fromIntegral cx, fromIntegral cy)
+  in zipWith interp [0..] curr
 
 viewModel :: props -> Model -> View Model Action
 viewModel _ m =
@@ -236,7 +264,7 @@ viewModel _ m =
       ]
     ]
 
-    [ H.style_ [] "html,body{margin:0;padding:0;overflow:hidden;} @keyframes headSlide{from{transform:var(--head-from)}to{transform:var(--head-to)}}"
+    [ H.style_ [] "html,body{margin:0;padding:0;overflow:hidden;}"
     , H.h1_
         [ style_
           [ margin "0 0 8px 0"
@@ -296,7 +324,7 @@ board m =
     : background
     : gridLines
    ++ [renderFood (_food m)]
-   ++ renderSnake (_justAte m) (_prevHead m) (_snake m)
+   ++ renderSnake (interpolatedPositions m)
    ++ [overlay m]
     )
 
@@ -386,34 +414,20 @@ renderFood (fx, fy) =
           ]
       ]
 
-renderSnake :: Bool -> (Int, Int) -> Seq (Int, Int) -> [View Model Action]
-renderSnake ate ph body = case Seq.viewl body of
-  EmptyL  -> []
-  h :< tl -> map renderBody (toList (Seq.reverse tl)) ++ [renderHead ate ph h]
+-- Takes interpolated (grid-space Double) positions, head first.
+renderSnake :: [(Double, Double)] -> [View Model Action]
+renderSnake []     = []
+renderSnake (h:tl) = map renderBody (reverse tl) ++ [renderHead h]
 
-renderHead :: Bool -> (Int, Int) -> (Int, Int) -> View Model Action
-renderHead ate (phx, phy) (hx, hy) =
-  let px   = svgCoord hx
-      py   = svgCoord hy
-      ppx  = svgCoord phx
-      ppy  = svgCoord phy
-      pad  = 1
-      sz   = cellSize - 2 * pad
-      tx   = "translate(" <> ms px  <> "px," <> ms py  <> "px)"
-      ptx  = "translate(" <> ms ppx <> "px," <> ms ppy <> "px)"
-      -- on the eating tick the head is a new DOM element; use a keyframe
-      -- animation from the previous head position so it slides in smoothly
-      -- rather than flying from (0,0)
-      headStyle
-        | ate       = [ ("--head-from", ptx)
-                      , ("--head-to",   tx)
-                      , animation "headSlide 175ms linear forwards"
-                      ]
-        | otherwise = [ transform tx
-                      , transition "transform 175ms linear"
-                      ]
+renderHead :: (Double, Double) -> View Model Action
+renderHead (hx, hy) =
+  let px  = svgCoordF hx
+      py  = svgCoordF hy
+      pad = 1
+      sz  = cellSize - 2 * pad
+      tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
   in S.g_
-      [ style_ headStyle ]
+      [ style_ [ transform tx ] ]
       [ S.rect_
           [ SP.x_ (si pad), SP.y_ (si pad)
           , HP.width_ (si sz), HP.height_ (si sz)
@@ -423,15 +437,15 @@ renderHead ate (phx, phy) (hx, hy) =
           ]
       ]
 
-renderBody :: (Int, Int) -> View Model Action
+renderBody :: (Double, Double) -> View Model Action
 renderBody (bx, by) =
-  let px  = svgCoord bx
-      py  = svgCoord by
+  let px  = svgCoordF bx
+      py  = svgCoordF by
       pad = 2
       sz  = cellSize - 2 * pad
       tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
   in S.g_
-      [ style_ [ transform tx, transition "transform 175ms linear" ] ]
+      [ style_ [ transform tx ] ]
       [ S.rect_
           [ SP.x_ (si pad), SP.y_ (si pad)
           , HP.width_ (si sz), HP.height_ (si sz)
