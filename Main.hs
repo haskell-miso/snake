@@ -47,6 +47,7 @@ data Model = Model
   , _score    :: !Int
   , _phase    :: !Phase
   , _justAte  :: !Bool
+  , _prevHead :: !(Int, Int)
   } deriving (Show, Eq)
 
 snake :: Lens Model (Seq (Int, Int))
@@ -72,6 +73,9 @@ phase = lens _phase $ \r x -> r { _phase = x }
 
 justAte :: Lens Model Bool
 justAte = lens _justAte $ \r x -> r { _justAte = x }
+
+prevHead :: Lens Model (Int, Int)
+prevHead = lens _prevHead $ \r x -> r { _prevHead = x }
 
 data Action
   = Tick
@@ -113,12 +117,13 @@ emptyModel = Model
   , _score    = 0
   , _phase    = NotStarted
   , _justAte  = False
+  , _prevHead = (10, 10)
   }
 
 app :: App Model Action
 app = (component emptyModel updateModel viewModel)
   { subs =
-    [ \sink -> forever (threadDelay 200000 >> sink Tick)
+    [ \sink -> forever (threadDelay 175000 >> sink Tick)
     , \sink -> windowSub "keydown" keycodeDecoder (\case
         KeyCode 37 -> Turn DLeft
         KeyCode 38 -> Turn DUp
@@ -179,7 +184,8 @@ updateModel = \case
         let d        = _queued m
             body     = _snake m
             occ      = _occupied m
-            newHead  = case Seq.viewl body of h :< _ -> step d h; _ -> (0,0)
+            headPos  = case Seq.viewl body of h :< _ -> h; _ -> (0,0)
+            newHead  = step d headPos
             (nx, ny) = newHead
             wall     = nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize
             self     = Set.member newHead occ
@@ -197,6 +203,7 @@ updateModel = \case
               snake    .= newBody
               occupied .= newOcc
               justAte  .= ate
+              prevHead .= headPos
               when ate $ do
                 score += 1
                 io $ pickFood newOcc >>= pure . PlaceFood
@@ -229,7 +236,7 @@ viewModel _ m =
       ]
     ]
 
-    [ H.style_ [] "html,body{margin:0;padding:0;overflow:hidden;}"
+    [ H.style_ [] "html,body{margin:0;padding:0;overflow:hidden;} @keyframes headSlide{from{transform:var(--head-from)}to{transform:var(--head-to)}}"
     , H.h1_
         [ style_
           [ margin "0 0 8px 0"
@@ -289,7 +296,7 @@ board m =
     : background
     : gridLines
    ++ [renderFood (_food m)]
-   ++ renderSnake (_justAte m) (_snake m)
+   ++ renderSnake (_justAte m) (_prevHead m) (_snake m)
    ++ [overlay m]
     )
 
@@ -379,22 +386,34 @@ renderFood (fx, fy) =
           ]
       ]
 
-renderSnake :: Bool -> Seq (Int, Int) -> [View Model Action]
-renderSnake ate body = case Seq.viewl body of
+renderSnake :: Bool -> (Int, Int) -> Seq (Int, Int) -> [View Model Action]
+renderSnake ate ph body = case Seq.viewl body of
   EmptyL  -> []
-  h :< tl -> map renderBody (toList (Seq.reverse tl)) ++ [renderHead ate h]
+  h :< tl -> map renderBody (toList (Seq.reverse tl)) ++ [renderHead ate ph h]
 
-renderHead :: Bool -> (Int, Int) -> View Model Action
-renderHead ate (hx, hy) =
-  let px  = svgCoord hx
-      py  = svgCoord hy
-      pad = 1
-      sz  = cellSize - 2 * pad
-      tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
-      -- suppress transition on the tick the head is newly inserted (after eating)
-      trans = if ate then "none" else "transform 200ms linear"
+renderHead :: Bool -> (Int, Int) -> (Int, Int) -> View Model Action
+renderHead ate (phx, phy) (hx, hy) =
+  let px   = svgCoord hx
+      py   = svgCoord hy
+      ppx  = svgCoord phx
+      ppy  = svgCoord phy
+      pad  = 1
+      sz   = cellSize - 2 * pad
+      tx   = "translate(" <> ms px  <> "px," <> ms py  <> "px)"
+      ptx  = "translate(" <> ms ppx <> "px," <> ms ppy <> "px)"
+      -- on the eating tick the head is a new DOM element; use a keyframe
+      -- animation from the previous head position so it slides in smoothly
+      -- rather than flying from (0,0)
+      headStyle
+        | ate       = [ ("--head-from", ptx)
+                      , ("--head-to",   tx)
+                      , animation "headSlide 175ms linear forwards"
+                      ]
+        | otherwise = [ transform tx
+                      , transition "transform 175ms linear"
+                      ]
   in S.g_
-      [ style_ [ transform tx, transition trans ] ]
+      [ style_ headStyle ]
       [ S.rect_
           [ SP.x_ (si pad), SP.y_ (si pad)
           , HP.width_ (si sz), HP.height_ (si sz)
@@ -412,7 +431,7 @@ renderBody (bx, by) =
       sz  = cellSize - 2 * pad
       tx  = "translate(" <> ms px <> "px," <> ms py <> "px)"
   in S.g_
-      [ style_ [ transform tx, transition "transform 200ms linear" ] ]
+      [ style_ [ transform tx, transition "transform 175ms linear" ] ]
       [ S.rect_
           [ SP.x_ (si pad), SP.y_ (si pad)
           , HP.width_ (si sz), HP.height_ (si sz)
