@@ -94,9 +94,9 @@ data Action
 
 main :: IO ()
 #ifdef INTERACTIVE
-main = reload pointerEvents app
+main = reload Miso.pointerEvents app
 #else
-main = startApp pointerEvents app
+main = startApp Miso.pointerEvents app
 #endif
 
 #ifdef WASM
