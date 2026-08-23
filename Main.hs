@@ -37,9 +37,12 @@ boardPx = gridSize * cellSize
 tickInterval :: Double
 tickInterval = 160.0
 
--- CSS transition string derived from tickInterval so they stay in sync.
+-- CSS transition derived from tickInterval, but deliberately shorter:
+-- animating over the full tick means the rendered position always lags one
+-- tick behind the game state, which reads as mushy. Arriving early with
+-- ease-out keeps the motion smooth while feeling immediate.
 segTransition :: Style
-segTransition = transition ("transform " <> ms (round tickInterval :: Int) <> "ms linear")
+segTransition = transition ("transform " <> ms (round (tickInterval * 0.6) :: Int) <> "ms ease-out")
 
 data Dir = DUp | DDown | DLeft | DRight deriving (Show, Eq)
 
@@ -49,12 +52,16 @@ data Model = Model
   { _snake     :: !(Seq (Int, Int))
   , _occupied  :: !(Set (Int, Int))
   , _dir       :: !Dir
-  , _queued    :: !Dir
+  , _queued    :: ![Dir]
+  -- up to two pending turns; buffering two lets fast corner combos
+  -- (e.g. Up then Left within one tick) both register
   , _food      :: !(Int, Int)
   , _score     :: !Int
   , _phase     :: !Phase
-  , _prevLen   :: !Int          -- snake length at start of last tick; suppresses CSS transition on newly-grown segments
-  , _prevSnake :: !(Seq (Int, Int))  -- positions from last tick; per-segment jump detection for wall wraps
+  , _prevLen   :: !Int
+  -- snake length at start of last tick; suppresses CSS transition on newly-grown segments
+  , _prevSnake :: !(Seq (Int, Int))
+  -- positions from last tick; per-segment jump detection for wall wraps
   } deriving (Show, Eq)
 
 snake :: Lens Model (Seq (Int, Int))
@@ -66,7 +73,7 @@ occupied = lens _occupied $ \r x -> r { _occupied = x }
 dir :: Lens Model Dir
 dir = lens _dir $ \r x -> r { _dir = x }
 
-queued :: Lens Model Dir
+queued :: Lens Model [Dir]
 queued = lens _queued $ \r x -> r { _queued = x }
 
 food :: Lens Model (Int, Int)
@@ -119,7 +126,7 @@ emptyModel = Model
   { _snake     = initSnake
   , _occupied  = initOccupied
   , _dir       = DRight
-  , _queued    = DRight
+  , _queued    = []
   , _food      = initFood
   , _score     = 0
   , _phase     = NotStarted
@@ -173,7 +180,11 @@ updateModel = \case
   Turn d -> do
     m <- get
     when (_phase m == NotStarted) (phase .= Playing)
-    when (d /= opposite (_dir m)) (queued .= d)
+    -- validate against the last pending turn (or current dir), so a
+    -- buffered turn can't be followed by its own reversal
+    let effective = case _queued m of [] -> _dir m; qs -> last qs
+    when (d /= opposite effective && d /= effective && length (_queued m) < 2) $
+      queued .= _queued m ++ [d]
 
   Tick -> do
     m <- get
@@ -181,13 +192,16 @@ updateModel = \case
       NotStarted -> pure ()
       GameOver   -> pure ()
       Playing    -> do
-        let d        = _queued m
+        let (d, rest) = case _queued m of
+              q:qs -> (q, qs)
+              []   -> (_dir m, [])
             body     = _snake m
             occ      = _occupied m
             headPos  = case Seq.viewl body of h :< _ -> h; _ -> (0,0)
             newHead = step d headPos
             self    = Set.member newHead occ
         dir       .= d
+        queued    .= rest
         prevLen   .= Seq.length body
         prevSnake .= body
         if self
@@ -216,8 +230,8 @@ si = ms
 svgCoord :: Int -> Int
 svgCoord n = n * cellSize + 1
 
-viewModel :: props -> Model -> View Model Action
-viewModel _ m =
+viewModel :: context -> props -> Model -> View context Model Action
+viewModel _ _ m =
   H.div_
     [ style_
       [ display "flex"
@@ -286,7 +300,7 @@ viewModel _ m =
         [ text "ARROWS / D-PAD — MOVE    N — NEW GAME" ]
     ]
 
-board :: Model -> View Model Action
+board :: Model -> View context Model Action
 board m =
   S.svg_
     [ HP.class_ "board"
@@ -306,7 +320,7 @@ board m =
    ++ [overlay m]
     )
 
-defs :: View Model Action
+defs :: View context Model Action
 defs =
   S.defs_ []
     [ S.filter_
@@ -339,7 +353,7 @@ defs =
         ]
     ]
 
-background :: View Model Action
+background :: View context Model Action
 background =
   S.g_ []
     [ S.rect_
@@ -356,7 +370,7 @@ background =
         ]
     ]
 
-gridLines :: [View Model Action]
+gridLines :: [View context Model Action]
 gridLines =
   [ S.line_
       [ SP.x1_ (si (svgCoord col)), SP.y1_ "1"
@@ -373,7 +387,7 @@ gridLines =
   | row <- [1..gridSize-1]
   ]
 
-renderFood :: (Int, Int) -> View Model Action
+renderFood :: (Int, Int) -> View context Model Action
 renderFood (fx, fy) =
   let cx = svgCoord fx + cellSize `div` 2
       cy = svgCoord fy + cellSize `div` 2
@@ -404,7 +418,7 @@ renderFood (fx, fy) =
 -- which happens on the tick a segment steps into a wrapped position.
 -- This covers the head on the wrap tick AND every body segment on the
 -- subsequent ticks as the wrapped position propagates down the snake.
-renderSnake :: Int -> Seq (Int, Int) -> Seq (Int, Int) -> [View Model Action]
+renderSnake :: Int -> Seq (Int, Int) -> Seq (Int, Int) -> [View context Model Action]
 renderSnake pl prev curr =
   let prevList = toList prev ++ repeat (0, 0)
   in zipWith3 render [0..] prevList (toList curr)
@@ -413,7 +427,7 @@ renderSnake pl prev curr =
     render 0 p c = renderHead (jumped p c) c
     render i p c = renderBody (i >= pl || jumped p c) i c
 
-renderHead :: Bool -> (Int, Int) -> View Model Action
+renderHead :: Bool -> (Int, Int) -> View context Model Action
 renderHead suppress (hx, hy) =
   let px  = svgCoord hx
       py  = svgCoord hy
@@ -435,7 +449,7 @@ renderHead suppress (hx, hy) =
           ]
       ]
 
-renderBody :: Bool -> Int -> (Int, Int) -> View Model Action
+renderBody :: Bool -> Int -> (Int, Int) -> View context Model Action
 renderBody isNew i (bx, by) =
   let px  = svgCoord bx
       py  = svgCoord by
@@ -456,13 +470,13 @@ renderBody isNew i (bx, by) =
           ]
       ]
 
-overlay :: Model -> View Model Action
+overlay :: Model -> View context Model Action
 overlay m = case _phase m of
   Playing    -> S.g_ [] []
   NotStarted -> overlayBox "TAP TO BEGIN" "OR PRESS AN ARROW KEY" "#4ade80" (Turn DRight)
   GameOver   -> overlayBox "GAME OVER" "TAP OR PRESS N" "#f87171" NewGame
 
-overlayBox :: MisoString -> MisoString -> MisoString -> Action -> View Model Action
+overlayBox :: MisoString -> MisoString -> MisoString -> Action -> View context Model Action
 overlayBox title sub clr act =
   S.g_ [ H.onPointerDown (const act), style_ [ cursor "pointer" ] ]
     [ S.rect_
@@ -493,7 +507,7 @@ overlayBox title sub clr act =
         ] [ text sub ]
     ]
 
-dpad :: View Model Action
+dpad :: View context Model Action
 dpad =
   H.div_
     [ HP.class_ "dpad"
