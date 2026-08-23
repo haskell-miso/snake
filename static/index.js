@@ -2,7 +2,14 @@ import { WASI, OpenFile, File, ConsoleStdout } from "https://cdn.jsdelivr.net/np
 import ghc_wasm_jsffi from "./ghc_wasm_jsffi.js";
 
 const args = [];
-const env = ["GHCRTS=-H64m"];
+// GC tuning, measured with GHCRTS=-S:
+//   -H64m (old): young gen ballooned, each GC recopied ~14MB live set
+//                -> 100-160ms stall every ~10s. Never use.
+//   default:     ~12ms minor GC every ~2s (copies ~2MB of live vdom).
+//   -A8m:        same ~12ms pause, half as frequent. Survivor size is
+//                bounded by live data, so a moderately bigger nursery
+//                only spaces GCs out without growing the copy.
+const env = ["GHCRTS=-A8m"];
 const fds = [
   new OpenFile(new File([])), // stdin
   ConsoleStdout.lineBuffered((msg) => console.log(`[WASI stdout] ''${msg}`)),

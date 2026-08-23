@@ -35,14 +35,16 @@ boardPx :: Int
 boardPx = gridSize * cellSize
 
 tickInterval :: Double
-tickInterval = 160.0
+tickInterval = 120.0
 
--- CSS transition derived from tickInterval, but deliberately shorter:
--- animating over the full tick means the rendered position always lags one
--- tick behind the game state, which reads as mushy. Arriving early with
--- ease-out keeps the motion smooth while feeling immediate.
+-- CSS transition slightly longer than the tick. Real tick spacing is
+-- tickInterval plus timer/render slop, so a transition of exactly
+-- tickInterval finishes early and leaves a variable per-tick freeze
+-- (visible jitter). Overshooting means a late tick interrupts a
+-- still-moving linear transition and motion stays continuous; a
+-- transition shorter than the tick stutters: move, pause, move.
 segTransition :: Style
-segTransition = transition ("transform " <> ms (round (tickInterval * 0.6) :: Int) <> "ms ease-out")
+segTransition = transition ("transform " <> ms (round (tickInterval * 1.25) :: Int) <> "ms linear")
 
 data Dir = DUp | DDown | DLeft | DRight deriving (Show, Eq)
 
@@ -251,6 +253,9 @@ viewModel _ _ m =
     [ H.style_ []
         (  "html,body{margin:0;padding:0;overflow:hidden;overscroll-behavior:none;}"
         <> ".board{touch-action:none;width:min(482px,calc(100vw - 16px));height:auto;}"
+        -- promote animating segments to compositor layers: transform
+        -- transitions then run off the main thread with no SVG repaint
+        <> ".seg{will-change:transform;}"
         <> ".dpad{display:none;}"
         <> "@media(pointer:coarse){.dpad{display:grid!important;}}"
         <> "button{-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;}"
@@ -315,8 +320,8 @@ board m =
     ( defs
     : background
     : gridLines
-   ++ [renderFood (_food m)]
-   ++ renderSnake (_prevLen m) (_prevSnake m) (_snake m)
+    : renderFood (_food m)
+    : renderSnake (_prevLen m) (_prevSnake m) (_snake m)
    ++ [overlay m]
     )
 
@@ -370,22 +375,19 @@ background =
         ]
     ]
 
-gridLines :: [View context Model Action]
+-- all 38 grid lines as a single <path>: one DOM node to convert, diff
+-- and paint per frame instead of 38
+gridLines :: View context Model Action
 gridLines =
-  [ S.line_
-      [ SP.x1_ (si (svgCoord col)), SP.y1_ "1"
-      , SP.x2_ (si (svgCoord col)), SP.y2_ (si (boardPx + 1))
-      , SP.stroke_ "#2a3f6f", SP.strokeWidth_ "1"
-      ]
-  | col <- [1..gridSize-1]
-  ] ++
-  [ S.line_
-      [ SP.x1_ "1",              SP.y1_ (si (svgCoord row))
-      , SP.x2_ (si (boardPx+1)), SP.y2_ (si (svgCoord row))
-      , SP.stroke_ "#2a3f6f", SP.strokeWidth_ "1"
-      ]
-  | row <- [1..gridSize-1]
-  ]
+  S.path_
+    [ SP.d_ (ms (concat (
+        [ "M" ++ show (svgCoord col) ++ " 1V" ++ show (boardPx + 1)
+        | col <- [1..gridSize-1] ] ++
+        [ "M1 " ++ show (svgCoord row) ++ "H" ++ show (boardPx + 1)
+        | row <- [1..gridSize-1] ])))
+    , SP.fill_ "none"
+    , SP.stroke_ "#2a3f6f", SP.strokeWidth_ "1"
+    ]
 
 renderFood :: (Int, Int) -> View context Model Action
 renderFood (fx, fy) =
@@ -438,14 +440,29 @@ renderHead suppress (hx, hy) =
           | otherwise = [ transform tx, segTransition ]
   in S.g_
       [ key_ (0 :: Int)
+      , HP.class_ "seg"
       , style_ st
       ]
+      -- glow as layered translucent rects instead of feGaussianBlur:
+      -- the blur filter forced a repaint on every frame of the
+      -- transition, causing visible hitching
       [ S.rect_
+          [ SP.x_ (si (pad - 4)), SP.y_ (si (pad - 4))
+          , HP.width_ (si (sz + 8)), HP.height_ (si (sz + 8))
+          , SP.rx_ "10", SP.ry_ "10"
+          , SP.fill_ "#4ade80", SP.opacity_ "0.15"
+          ]
+      , S.rect_
+          [ SP.x_ (si (pad - 2)), SP.y_ (si (pad - 2))
+          , HP.width_ (si (sz + 4)), HP.height_ (si (sz + 4))
+          , SP.rx_ "8", SP.ry_ "8"
+          , SP.fill_ "#4ade80", SP.opacity_ "0.25"
+          ]
+      , S.rect_
           [ SP.x_ (si pad), SP.y_ (si pad)
           , HP.width_ (si sz), HP.height_ (si sz)
           , SP.rx_ "6", SP.ry_ "6"
           , SP.fill_ "url(#headGrad)"
-          , SP.filter_ "url(#glow)"
           ]
       ]
 
@@ -460,6 +477,7 @@ renderBody isNew i (bx, by) =
           | otherwise = [ transform tx, segTransition ]
   in S.g_
       [ key_ i
+      , HP.class_ "seg"
       , style_ st
       ]
       [ S.rect_
