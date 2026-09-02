@@ -139,8 +139,8 @@ emptyModel = Model
 app :: App Model Action
 app = (component emptyModel updateModel viewModel)
   { subs =
-    [ \sink -> forever (threadDelay (round (tickInterval * 1000)) >> sink Tick)
-    , \sink -> windowSub "keydown" keycodeDecoder (\case
+    [ \sink _ -> forever (threadDelay (round (tickInterval * 1000)) >> sink Tick)
+    , \sink _ -> windowSub "keydown" keycodeDecoder (\case
         KeyCode 37 -> Turn DLeft
         KeyCode 38 -> Turn DUp
         KeyCode 39 -> Turn DRight
