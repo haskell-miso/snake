@@ -232,8 +232,8 @@ si = ms
 svgCoord :: Int -> Int
 svgCoord n = n * cellSize + 1
 
-viewModel :: context -> props -> Model -> View context Model Action
-viewModel _ _ m =
+viewModel :: Model -> View context props Model Action
+viewModel m =
   H.div_
     [ style_
       [ display "flex"
@@ -305,7 +305,7 @@ viewModel _ _ m =
         [ text "ARROWS / D-PAD — MOVE    N — NEW GAME" ]
     ]
 
-board :: Model -> View context Model Action
+board :: Model -> View context props Model Action
 board m =
   S.svg_
     [ HP.class_ "board"
@@ -325,7 +325,7 @@ board m =
    ++ [overlay m]
     )
 
-defs :: View context Model Action
+defs :: View context props Model Action
 defs =
   S.defs_ []
     [ S.filter_
@@ -358,7 +358,7 @@ defs =
         ]
     ]
 
-background :: View context Model Action
+background :: View context props Model Action
 background =
   S.g_ []
     [ S.rect_
@@ -377,7 +377,7 @@ background =
 
 -- all 38 grid lines as a single <path>: one DOM node to convert, diff
 -- and paint per frame instead of 38
-gridLines :: View context Model Action
+gridLines :: View context props Model Action
 gridLines =
   S.path_
     [ SP.d_ (ms (concat (
@@ -389,7 +389,7 @@ gridLines =
     , SP.stroke_ "#2a3f6f", SP.strokeWidth_ "1"
     ]
 
-renderFood :: (Int, Int) -> View context Model Action
+renderFood :: (Int, Int) -> View context props Model Action
 renderFood (fx, fy) =
   let cx = svgCoord fx + cellSize `div` 2
       cy = svgCoord fy + cellSize `div` 2
@@ -420,7 +420,7 @@ renderFood (fx, fy) =
 -- which happens on the tick a segment steps into a wrapped position.
 -- This covers the head on the wrap tick AND every body segment on the
 -- subsequent ticks as the wrapped position propagates down the snake.
-renderSnake :: Int -> Seq (Int, Int) -> Seq (Int, Int) -> [View context Model Action]
+renderSnake :: Int -> Seq (Int, Int) -> Seq (Int, Int) -> [View context props Model Action]
 renderSnake pl prev curr =
   let prevList = toList prev ++ repeat (0, 0)
   in zipWith3 render [0..] prevList (toList curr)
@@ -429,7 +429,7 @@ renderSnake pl prev curr =
     render 0 p c = renderHead (jumped p c) c
     render i p c = renderBody (i >= pl || jumped p c) i c
 
-renderHead :: Bool -> (Int, Int) -> View context Model Action
+renderHead :: Bool -> (Int, Int) -> View context props Model Action
 renderHead suppress (hx, hy) =
   let px  = svgCoord hx
       py  = svgCoord hy
@@ -466,7 +466,7 @@ renderHead suppress (hx, hy) =
           ]
       ]
 
-renderBody :: Bool -> Int -> (Int, Int) -> View context Model Action
+renderBody :: Bool -> Int -> (Int, Int) -> View context props Model Action
 renderBody isNew i (bx, by) =
   let px  = svgCoord bx
       py  = svgCoord by
@@ -488,13 +488,13 @@ renderBody isNew i (bx, by) =
           ]
       ]
 
-overlay :: Model -> View context Model Action
+overlay :: Model -> View context props Model Action
 overlay m = case _phase m of
   Playing    -> S.g_ [] []
   NotStarted -> overlayBox "TAP TO BEGIN" "OR PRESS AN ARROW KEY" "#4ade80" (Turn DRight)
   GameOver   -> overlayBox "GAME OVER" "TAP OR PRESS N" "#f87171" NewGame
 
-overlayBox :: MisoString -> MisoString -> MisoString -> Action -> View context Model Action
+overlayBox :: MisoString -> MisoString -> MisoString -> Action -> View context props Model Action
 overlayBox title sub clr act =
   S.g_ [ H.onPointerDown (const act), style_ [ cursor "pointer" ] ]
     [ S.rect_
@@ -525,7 +525,7 @@ overlayBox title sub clr act =
         ] [ text sub ]
     ]
 
-dpad :: View context Model Action
+dpad :: View context props Model Action
 dpad =
   H.div_
     [ HP.class_ "dpad"
